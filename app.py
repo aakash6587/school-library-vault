@@ -1,12 +1,15 @@
-from flask import Flask, render_template, request, jsonify, send_file
-from stego_engine import encode_image, decode_image
+from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
+from stego_engine import (
+    encode_image, decode_image, 
+    encode_image_in_image, decode_image_from_image,
+    encode_dual_stego, decode_dual_stego
+)
 import os
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# 50-Book Database categorized by Genre
 LIBRARY_DATA = {
     "Academic & Textbooks": [
         {"title": "Concise Physics Class XII", "info": "Available — Section A, Shelf 1 (Acc No: 1001)"},
@@ -83,11 +86,9 @@ def search_book():
     title = request.form.get('book_title', '').strip().lower()
     serial = request.form.get('book_no', '').strip()
 
-    # Secret Trigger
     if title == 'mythios' and serial == '3695':
         return jsonify({'status': 'covert_unlock', 'redirect': '/vault'})
 
-    # Normal Search
     for genre, book_list in LIBRARY_DATA.items():
         for b in book_list:
             if title in b['title'].lower() or b['title'].lower() in title:
@@ -99,36 +100,106 @@ def search_book():
 def vault():
     return render_template('vault.html')
 
+# ROUTE TO SERVE UPLOADED/EXTRACTED FILES DIRECTLY
+@app.route('/uploads/<filename>')
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
 @app.route('/encode', methods=['POST'])
 def encode():
-    if 'image' not in request.files:
-        return "No image uploaded", 400
+    if 'image' not in request.files: return "No image uploaded", 400
     file = request.files['image']
     message = request.form.get('message', '')
     key = request.form.get('key', '')
     
     input_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
-    output_path = os.path.join(app.config['UPLOAD_FOLDER'], "stego_" + file.filename)
+    output_filename = "stego_" + os.path.splitext(file.filename)[0] + ".png"
+    output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
     
     file.save(input_path)
     encode_image(input_path, message, key, output_path)
-    return send_file(output_path, as_attachment=True)
+    return send_file(output_path, as_attachment=True, download_name=output_filename, mimetype='image/png')
 
 @app.route('/decode', methods=['POST'])
 def decode():
-    if 'stego_image' not in request.files:
-        return jsonify({'success': False, 'result': 'No image uploaded'})
+    if 'stego_image' not in request.files: return jsonify({'success': False, 'result': 'No image uploaded'})
     file = request.files['stego_image']
     key = request.form.get('key', '')
     
     input_path = os.path.join(app.config['UPLOAD_FOLDER'], "temp_" + file.filename)
     file.save(input_path)
-    
     success, result = decode_image(input_path, key)
-    if os.path.exists(input_path):
-        os.remove(input_path)
-        
+    if os.path.exists(input_path): os.remove(input_path)
     return jsonify({'success': success, 'result': result})
+
+@app.route('/encode_img', methods=['POST'])
+def encode_img():
+    if 'cover_image' not in request.files or 'secret_image' not in request.files: return "Missing images", 400
+    cover = request.files['cover_image']
+    secret = request.files['secret_image']
+    
+    cover_path = os.path.join(app.config['UPLOAD_FOLDER'], "cover_" + cover.filename)
+    secret_path = os.path.join(app.config['UPLOAD_FOLDER'], "secret_" + secret.filename)
+    output_filename = "stego_img_" + os.path.splitext(cover.filename)[0] + ".png"
+    output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
+    
+    cover.save(cover_path)
+    secret.save(secret_path)
+    encode_image_in_image(cover_path, secret_path, output_path)
+    
+    if os.path.exists(cover_path): os.remove(cover_path)
+    if os.path.exists(secret_path): os.remove(secret_path)
+    return send_file(output_path, as_attachment=True, download_name=output_filename, mimetype='image/png')
+
+@app.route('/decode_img', methods=['POST'])
+def decode_img():
+    if 'stego_image' not in request.files: return "No image uploaded", 400
+    file = request.files['stego_image']
+    input_path = os.path.join(app.config['UPLOAD_FOLDER'], "temp_" + file.filename)
+    output_path = os.path.join(app.config['UPLOAD_FOLDER'], "extracted_secret.png")
+    
+    file.save(input_path)
+    decode_image_from_image(input_path, output_path)
+    if os.path.exists(input_path): os.remove(input_path)
+    return send_file(output_path, as_attachment=True, download_name="extracted_secret.png", mimetype='image/png')
+
+@app.route('/encode_dual', methods=['POST'])
+def encode_dual():
+    if 'cover_image' not in request.files or 'secret_image' not in request.files: return "Missing files", 400
+    cover = request.files['cover_image']
+    secret_img = request.files['secret_image']
+    message = request.form.get('message', '')
+    
+    cover_path = os.path.join(app.config['UPLOAD_FOLDER'], "dual_cover_" + cover.filename)
+    secret_path = os.path.join(app.config['UPLOAD_FOLDER'], "dual_secret_" + secret_img.filename)
+    output_filename = "dual_stego_" + os.path.splitext(cover.filename)[0] + ".png"
+    output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
+    
+    cover.save(cover_path)
+    secret_img.save(secret_path)
+    encode_dual_stego(cover_path, secret_path, message, output_path)
+    
+    if os.path.exists(cover_path): os.remove(cover_path)
+    if os.path.exists(secret_path): os.remove(secret_path)
+    return send_file(output_path, as_attachment=True, download_name=output_filename, mimetype='image/png')
+
+@app.route('/decode_dual', methods=['POST'])
+def decode_dual():
+    if 'stego_image' not in request.files: return jsonify({'success': False, 'result': 'No image uploaded'})
+    file = request.files['stego_image']
+    
+    input_path = os.path.join(app.config['UPLOAD_FOLDER'], "temp_dual_" + file.filename)
+    extracted_img_path = os.path.join(app.config['UPLOAD_FOLDER'], "extracted_dual_secret.png")
+    file.save(input_path)
+    
+    success, result_text = decode_dual_stego(input_path, extracted_img_path)
+    if os.path.exists(input_path): os.remove(input_path)
+    
+    return jsonify({
+        'success': success,
+        'result_text': result_text,
+        'extracted_image_url': '/uploads/extracted_dual_secret.png'
+    })
 
 if __name__ == '__main__':
     app.run(debug=True)
